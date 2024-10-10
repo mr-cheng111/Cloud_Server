@@ -20,7 +20,7 @@ Client_Service_t::Client_Service_t(uint16_t Client_ID)
 
 }
 
-Client_Service_t::Client_Service_t(uint16_t Client_ID, UDP_Listen_t *Parent_)
+Client_Service_t::Client_Service_t(uint16_t Client_ID, UDP_Server_t *Parent_)
 {
     if(Client_ID > 0)
     {

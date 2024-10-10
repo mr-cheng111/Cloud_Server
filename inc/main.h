@@ -29,15 +29,6 @@ enum
 struct Data_Frame_t
 {
 public:
-    Data_Frame_t(const uint16_t ID_, const uint8_t CMD_, const uint8_t Data_Length_)
-    {
-        ID_L = ID_ & 0xff;
-        ID_H = ID_ >> 8;
-        CMD = CMD_;
-        Data_Length = Data_Length_;
-        Data = new uint8_t(Data_Length);
-        Tail = ID_L + ID_H + CMD + Data_Length;
-    }
     Data_Frame_t( const uint16_t ID_, uint8_t CMD_, const uint8_t Data_Length_, const uint8_t *Data_)
     {
         ID_L = ID_ & 0xff;
@@ -61,25 +52,24 @@ public:
 };
 
 
-class UDP_Listen_t
+class UDP_Server_t
 {
 
 private:
     int sockfd;
     uint8_t buffer[BUF_SIZE];
-
-    thread *UDP_Listen_Thread;
+    thread *UDP_Server_Thread;
     thread *ID_Detect_Thread;
+    weak_ptr<UDP_Server_t> Des;
 
 public:
     struct sockaddr_in server_addr, client_addr;
     socklen_t addr_len = sizeof(client_addr);
-    mutex Get_Data_Lock;
     array<shared_ptr<Client_Service_t>, CLIENT_NUM> Client_Queue;
     array<atomic<uint8_t>, CLIENT_NUM> Client_Connect_Flag;
     atomic<bool> running = false;
 
-    UDP_Listen_t()
+    UDP_Server_t()
     {
         //  创建 UDP 套接字
         if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) 
@@ -102,19 +92,19 @@ public:
             exit(EXIT_FAILURE);
         }
         running = true;
-        UDP_Listen_Thread = new thread(UDP_Server_Task, this);
+        UDP_Server_Thread = new thread(UDP_Server_t_Task, this);
         ID_Detect_Thread  = new thread(ID_Detect_Task, this);
     }
 
-    ~UDP_Listen_t()
+    ~UDP_Server_t()
     {
         close(sockfd);
         this->running = false;
-        this->UDP_Listen_Thread->join();
+        this->UDP_Server_Thread->join();
         this->ID_Detect_Thread->join();
     }
 
-    static void UDP_Server_Task(UDP_Listen_t *Parent)
+    static void UDP_Server_t_Task(UDP_Server_t *Parent)
     {
         
         while(Parent->running)
@@ -131,7 +121,10 @@ public:
                 uint16_t Temp_ID = (uint16_t) (static_cast<uint8_t>(Parent->buffer[1]) << 8 | static_cast<uint8_t>(Parent->buffer[0]));
                 // 获取当前输入的控制标志
                 uint8_t CMD_Flag = Parent->buffer[2];
-
+                // 获取当前数据长度
+                uint8_t Data_Length = Parent->buffer[3];
+                // 获取当前数据的求和校验
+                uint8_t Data_Tail = Parent->buffer[n - 1];
                 if(CMD_Flag == 1)
                 {
                     // 服务对象不存在
@@ -160,13 +153,64 @@ public:
                         {
                             Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                             // 将数据放入队列
-                            uint8_t *Data = new uint8_t(n - 3);
-                            copy_n(Data, n, Parent->buffer);
-                            Parent->Get_Data_Lock.lock();
-                            Parent->Client_Queue.at(Temp_ID)->buffer.push(Data);
-                            /***************TODO：添加发送到客户端逻辑**************/
-                            cout << Parent->Client_Queue.at(Temp_ID)->buffer.size() << endl;
-                            Parent->Get_Data_Lock.unlock();
+                            Data_Frame_t *Data = new Data_Frame_t(Temp_ID, CMD_Flag, Data_Length, Parent->buffer + 4);
+                            if(Data->Tail == Data_Tail)
+                            {
+                                Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.lock();
+                                Parent->Client_Queue.at(Temp_ID)->buffer.push(Data);
+                                Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.unlock();
+                            }
+
+                            /***************TODO：测试发送到客户端逻辑**************/
+                            
+                            if(std::shared_ptr<UDP_Server_t> Des = Parent->Des.lock())
+                            {
+                                if(Des->Client_Queue.at(Temp_ID) != nullptr)
+                                {
+                                    try
+                                    {
+                                        if(Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.try_lock())
+                                        {
+                                            if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED )
+                                            {
+                                                Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                                                
+                                                Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.lock();
+                                                Data_Frame_t *Temp_Data = Parent->Client_Queue.at(Temp_ID)->buffer.front();
+                                                Parent->Client_Queue.at(Temp_ID)->buffer.pop();
+                                                Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.unlock();
+                                                Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                                Des->Send_Data2Client(Des->Client_Queue.at(Temp_ID)->addr, \
+                                                                      Des->Client_Queue.at(Temp_ID)->addr_len,\
+                                                                      Temp_Data);
+                                                Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+                                                cout << "成功发送！" << endl;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                                            throw std::runtime_error("Can't get lock failed."); //  抛出异常
+                                        }
+                                    }
+                                    catch(const std::runtime_error& e)
+                                    {
+                                        std::cerr << "Failed: " << e.what() << '\n';
+                                    }
+                                    catch(...)
+                                    {
+                                        std::cerr << "Caught an unknown exception!" << endl;
+                                    }
+                                }
+                                else
+                                {
+                                    cout << "未找到接受客户端！" << endl;
+                                }
+                            }
+                            else
+                            {
+                                cout << "未找到监听程序！" << endl;
+                            }
                             Parent->Send_Response_Heart(Temp_ID, \
                                                         Parent->Client_Queue.at(Temp_ID)->addr, \
                                                         Parent->Client_Queue.at(Temp_ID)->addr_len, \
@@ -180,46 +224,46 @@ public:
                         }
                     }
                 }
-                else if(CMD_Flag == 0)
-                {
-                    // 服务对象不存在
-                    if(Parent->Client_Queue.at(Temp_ID) == nullptr)
-                    {
-                        // 为此ID机器创建消息队列
-                        Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
-                        cout << "Client:" << Temp_ID << "，登录成功！" << endl;
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
-                        Parent->Client_Connect_Flag.at(Temp_ID) = CONNECTED;
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                    }
-                    else
-                    {
-                        // 当前状态为未连接
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
-                        if(Parent->Client_Connect_Flag.at(Temp_ID) == DIS_CONNECTED)
-                        {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                            Parent->Client_Queue.at(Temp_ID).reset();
-                            Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
-                            cout << "Client:" << Temp_ID << "重新登录成功！" << endl;
-                        }
-                        // 当前为已连接
-                        else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
-                        {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                            Parent->Send_Response_Heart(Temp_ID, \
-                                                        Parent->Client_Queue.at(Temp_ID)->addr, \
-                                                        Parent->Client_Queue.at(Temp_ID)->addr_len, \
-                                                        CMD_Flag);
-                            Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
-                        }
-                        // 当前为正在连接
-                        else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTING)
-                        {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                        }
-                    }
-                }
+                // else if(CMD_Flag == 0)
+                // {
+                //     // 服务对象不存在
+                //     if(Parent->Client_Queue.at(Temp_ID) == nullptr)
+                //     {
+                //         // 为此ID机器创建消息队列
+                //         Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
+                //         cout << "Client:" << Temp_ID << "，登录成功！" << endl;
+                //         Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
+                //         Parent->Client_Connect_Flag.at(Temp_ID) = CONNECTED;
+                //         Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                //     }
+                //     else
+                //     {
+                //         // 当前状态为未连接
+                //         Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
+                //         if(Parent->Client_Connect_Flag.at(Temp_ID) == DIS_CONNECTED)
+                //         {
+                //             Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                //             Parent->Client_Queue.at(Temp_ID).reset();
+                //             Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
+                //             cout << "Client:" << Temp_ID << "重新登录成功！" << endl;
+                //         }
+                //         // 当前为已连接
+                //         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
+                //         {
+                //             Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                //             Parent->Send_Response_Heart(Temp_ID, \
+                //                                         Parent->Client_Queue.at(Temp_ID)->addr, \
+                //                                         Parent->Client_Queue.at(Temp_ID)->addr_len, \
+                //                                         CMD_Flag);
+                //             Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
+                //         }
+                //         // 当前为正在连接
+                //         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTING)
+                //         {
+                //             Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                //         }
+                //     }
+                // }
             }
             catch (const std::runtime_error& e) 
             {
@@ -232,7 +276,7 @@ public:
         }
     }
 
-    static void ID_Detect_Task(UDP_Listen_t *Parent)
+    static void ID_Detect_Task(UDP_Server_t *Parent)
     {
         while(Parent->running)
         {
@@ -304,7 +348,20 @@ public:
             std::cout << "向设备： " << ID << " 发送控制指令: " << Data << std::endl;
         }
     }
+    void Send_Data2Client(const struct sockaddr_in& client_addr, socklen_t addr_len ,Data_Frame_t *Send_Data)
+    {
+        // 向客户端发送控制指令
 
+        ssize_t sent = sendto(sockfd, Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
+        if (sent < 0)
+        {
+            std::cerr << "发送失败" << std::endl;
+        }
+        else
+        {
+            std::cout << "向设备： " << unsigned((uint16_t) (Send_Data->ID_H << 8 | Send_Data->ID_L)) << " 发送控制指令" << std::endl;
+        }
+    }
 };
 
 

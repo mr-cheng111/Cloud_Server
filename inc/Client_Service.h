@@ -16,7 +16,8 @@
 
 using namespace std;
 
-class UDP_Listen_t;
+class UDP_Server_t;
+struct Data_Frame_t;
 
 class Client_Service_t
 {
@@ -28,16 +29,19 @@ private:
     
 public:
     uint16_t Service_ID;
-    queue<uint8_t *> buffer;
+    queue<Data_Frame_t *> buffer;
     mutex Client_Connect_Flag_Change_Lock;
+    mutex Client_Get_Data_Lock;
+    mutex Client_Send_Data_Lock;
+
     atomic<bool> running;
-    UDP_Listen_t *Parent;
+    UDP_Server_t *Parent;
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
     
     Client_Service_t(uint16_t Client_ID);
 
-    Client_Service_t(uint16_t Client_ID, UDP_Listen_t *Parent_);
+    Client_Service_t(uint16_t Client_ID, UDP_Server_t *Parent_);
 
     ~Client_Service_t();
     void Update_Heart_Counter(void);
