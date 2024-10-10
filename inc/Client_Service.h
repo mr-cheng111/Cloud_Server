@@ -18,31 +18,31 @@ using namespace std;
 
 class UDP_Listen_t;
 
-class Client_Car_t
+class Client_Service_t
 {
 private:
-    std::thread *Client_Car_Thread;
+    std::thread *Client_Service_Thread;
     mutex Heart_Counter_Lock;
     uint8_t Heart_Counter = 25;
 
     
 public:
-    uint16_t Car_ID;
+    uint16_t Service_ID;
     queue<uint8_t *> buffer;
-    mutex Robot_Connect_Flag_Change_Lock;
+    mutex Client_Connect_Flag_Change_Lock;
     atomic<bool> running;
     UDP_Listen_t *Parent;
-    struct sockaddr_in car_addr;
-    socklen_t car_addr_len = sizeof(car_addr);
+    struct sockaddr_in addr;
+    socklen_t addr_len = sizeof(addr);
     
-    Client_Car_t(uint16_t Client_ID);
+    Client_Service_t(uint16_t Client_ID);
 
-    Client_Car_t(uint16_t Client_ID, UDP_Listen_t *Parent_);
+    Client_Service_t(uint16_t Client_ID, UDP_Listen_t *Parent_);
 
-    ~Client_Car_t();
+    ~Client_Service_t();
     void Update_Heart_Counter(void);
 
-    static void Listen_Car_Task(Client_Car_t *Parent);
+    static void Listen_Service_Task(Client_Service_t *Parent);
 };
 
 

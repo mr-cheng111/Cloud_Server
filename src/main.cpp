@@ -2,7 +2,6 @@
 #include <csignal>
 #include <linux/udp.h>
 #include <queue>
-#include "Client_Car.h"
 #include "main.h"
 
 using namespace std;
@@ -12,7 +11,7 @@ int main(int argc, char **argv)
 {
 
     cout << "Hello World!" << endl;
-    // Client_Car_t *A = new Client_Car_t(1);
+
     UDP_Listen_t *A = new UDP_Listen_t();
     while (i > 0) 
     {
