@@ -1,0 +1,319 @@
+#ifndef MAIN_H
+#define MAIN_H
+
+#include "Client_Car.h"
+#include <iostream>
+#include <algorithm>
+#include <mutex>
+#include <memory>
+#include <thread>
+#include <atomic>
+#include <linux/udp.h>
+#include <unistd.h>    // For close
+#include <arpa/inet.h> // For sockaddr_in and inet_ntoa
+
+
+#define PORT 80             // 监听的端口
+#define BUF_SIZE 1024       // 缓冲区大小
+#define ROBOT_NUM 15000    //机器人最大数量, 同时也是ID范围
+
+
+using namespace std;
+
+
+enum
+{
+    CONNECTED = 0,
+    CONNECTING,
+    DIS_CONNECTED
+};
+
+struct Data_Frame_t
+{
+    #define char uint8_t
+public:
+    Data_Frame_t(const uint16_t ID_, const uint8_t CMD_, const uint8_t Data_Length_)
+    {
+        ID_L = ID_ & 0xff;
+        ID_H = ID_ >> 8;
+        CMD = CMD_;
+        Data_Length = Data_Length_;
+        Data = new uint8_t(Data_Length);
+        Tail = ID_L + ID_H + CMD + Data_Length;
+    }
+    Data_Frame_t( const uint16_t ID_, uint8_t CMD_, const uint8_t Data_Length_, const uint8_t *Data_)
+    {
+        ID_L = ID_ & 0xff;
+        ID_H = ID_ >> 8;
+        CMD = CMD_;
+        Data_Length = Data_Length_;
+        Data = new uint8_t(Data_Length);
+        copy_n(Data, Data_Length, Data_);
+        Tail = ID_L + ID_H + CMD + Data_Length;
+        for(uint16_t i = 0;i < Data_Length + 4; i++)
+        {
+            Tail += Data[i];
+        }
+    }
+    uint8_t ID_L;
+    uint8_t ID_H;
+    uint8_t CMD;
+    uint8_t Data_Length;
+    uint8_t *Data;
+    uint8_t Tail;
+};
+
+
+class UDP_Listen_t
+{
+
+private:
+    int sockfd;
+    uint8_t buffer[BUF_SIZE];
+
+    thread *UDP_Listen_Thread;
+    thread *ID_Detect_Thread;
+
+public:
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    mutex Get_Data_Lock;
+    array<shared_ptr<Client_Car_t>, ROBOT_NUM> Robot_Client_Queue;
+    array<atomic<uint8_t>, ROBOT_NUM> Robot_Connect_Flag;
+    atomic<bool> running = false;
+
+    UDP_Listen_t()
+    {
+        // 创建 UDP 套接字
+        if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) 
+        {
+            std::cerr << "Socket creation failed" << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        // 填充服务器地址结构
+        memset(&server_addr, 0, sizeof(server_addr)); // 清零
+        server_addr.sin_family = AF_INET;             // 设置地址族为 IPv4
+        server_addr.sin_addr.s_addr = INADDR_ANY;     // 监听所有接口
+        server_addr.sin_port = htons(PORT);           // 设置端口号
+
+        // 绑定
+        if(bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) 
+        {
+            std::cerr << "Bind failed" << std::endl;
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+        running = true;
+        UDP_Listen_Thread = new thread(UDP_Server_Task, this);
+        ID_Detect_Thread  = new thread(ID_Detect_Task, this);
+    }
+
+    ~UDP_Listen_t()
+    {
+        close(sockfd);
+        this->running = false;
+        this->UDP_Listen_Thread->join();
+        this->ID_Detect_Thread->join();
+    }
+
+    static void UDP_Server_Task(UDP_Listen_t *Parent)
+    {
+        
+        while(Parent->running)
+        {
+            try 
+            {
+                ssize_t n = recvfrom(Parent->sockfd, Parent->buffer, BUF_SIZE, MSG_WAITALL, (struct sockaddr *)&Parent->client_addr, &Parent->addr_len);
+                if (n < 0)
+                {
+                    throw std::runtime_error("Receive failed"); // 抛出异常
+                }
+                
+                //获取当前输入的ID
+                uint16_t Temp_ID = (uint16_t) (static_cast<uint8_t>(Parent->buffer[1]) << 8 | static_cast<uint8_t>(Parent->buffer[0]));
+                //获取当前输入的控制标志
+                uint8_t CMD_Flag = Parent->buffer[2];
+
+                /*TODO:加入自定义的服务类，使用服务类实现数据传输以及维护管理*/
+
+                // 客户端接入服务器
+                if(CMD_Flag == 0)
+                {
+                    // if(Parent->Robot_Client_Queue.at(Temp_ID) == nullptr)
+                    // {
+                    //     //为此ID机器创建消息队列
+                    //     Parent->Robot_Client_Queue.at(Temp_ID) =  make_shared<Client_Car_t>(Temp_ID, Parent);
+                    //     cout << "Robot:" << Temp_ID << "，登录成功！" << endl;
+                    //     Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.lock();
+                    //     Parent->Robot_Connect_Flag.at(Temp_ID) = CONNECTED;
+                    //     Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                    // }
+                    // else
+                    // {
+                    //     //当前状态为未连接
+                    //     Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.lock();
+                    //     if(Parent->Robot_Connect_Flag.at(Temp_ID) == DIS_CONNECTED)
+                    //     {
+                    //         Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                    //         Parent->Robot_Client_Queue.at(Temp_ID).reset();
+                    //         Parent->Robot_Client_Queue.at(Temp_ID) =  make_shared<Client_Car_t>(Temp_ID, Parent);
+                    //         cout << "Robot:" << Temp_ID << "重新登录成功！" << endl;
+                    //     }
+                    //     //当前为已连接
+                    //     else if(Parent->Robot_Connect_Flag.at(Temp_ID) == CONNECTED)
+                    //     {
+                    //         Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                    //     }
+                    //     //当前为正在连接
+                    //     else if(Parent->Robot_Connect_Flag.at(Temp_ID) == CONNECTING)
+                    //     {
+                    //         Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                    //     }
+                    // }
+                }
+                // 机器人接入服务器
+                else if(CMD_Flag == 1)
+                {
+                    // 服务对象不存在
+                    if(Parent->Robot_Client_Queue.at(Temp_ID) == nullptr)
+                    {
+                        //为此ID机器创建消息队列
+                        Parent->Robot_Client_Queue.at(Temp_ID) =  make_shared<Client_Car_t>(Temp_ID, Parent);
+                        cout << "Robot:" << Temp_ID << "，登录成功！" << endl;
+                        Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.lock();
+                        Parent->Robot_Connect_Flag.at(Temp_ID) = CONNECTED;
+                        Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                    }
+                    else 
+                    {
+                        //当前状态为未连接
+                        Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.lock();
+                        if(Parent->Robot_Connect_Flag.at(Temp_ID) == DIS_CONNECTED)
+                        {
+                            Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                            Parent->Robot_Client_Queue.at(Temp_ID).reset();
+                            Parent->Robot_Client_Queue.at(Temp_ID) =  make_shared<Client_Car_t>(Temp_ID, Parent);
+                            cout << "Robot:" << Temp_ID << "重新登录成功！" << endl;
+                        }
+                        //当前为已连接
+                        else if(Parent->Robot_Connect_Flag.at(Temp_ID) == CONNECTED)
+                        {
+                            Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                            //将数据放入队列
+                            uint8_t *Data = new uint8_t(n - 3);
+                            copy_n(Data, n, Parent->buffer);
+                            Parent->Get_Data_Lock.lock();
+                            Parent->Robot_Client_Queue.at(Temp_ID)->buffer.push(Data);
+                            /***************TODO：添加发送到客户端逻辑**************/
+                            cout << Parent->Robot_Client_Queue.at(Temp_ID)->buffer.size() << endl;
+                            Parent->Get_Data_Lock.unlock();
+                            Parent->Send_Response_Heart(Temp_ID, \
+                                                        Parent->Robot_Client_Queue.at(Temp_ID)->car_addr, \
+                                                        Parent->Robot_Client_Queue.at(Temp_ID)->car_addr_len, \
+                                                        CMD_Flag);
+                            Parent->Robot_Client_Queue.at(Temp_ID)->Update_Heart_Counter();
+                        }
+                        //当前为正在连接
+                        else if(Parent->Robot_Connect_Flag.at(Temp_ID) == CONNECTING)
+                        {
+                            Parent->Robot_Client_Queue.at(Temp_ID)->Robot_Connect_Flag_Change_Lock.unlock();
+                        }
+                    }
+                }
+            }
+            catch (const std::runtime_error& e) 
+            {
+                std::cerr << "Caught an exception: " << e.what() << std::endl;
+            } 
+            catch (...)
+            {
+                std::cerr << "Caught an unknown exception!" << std::endl;
+            }
+        }
+    }
+
+    static void ID_Detect_Task(UDP_Listen_t *Parent)
+    {
+        while(Parent->running)
+        {
+            for(uint32_t i = 0;i < ROBOT_NUM; i++)
+            {
+                //检测是否创建机器人服务节点
+                if(Parent->Robot_Client_Queue.at(i) != nullptr)
+                {
+                    //将连接表加锁
+                    Parent->Robot_Client_Queue.at(i)->Robot_Connect_Flag_Change_Lock.lock();
+                    //如果连接状态为DIS_CONNECTED，则此时清理对应的服务节点
+                    if(Parent->Robot_Connect_Flag.at(i) == DIS_CONNECTED)
+                    {
+                        Parent->Robot_Client_Queue.at(i)->Robot_Connect_Flag_Change_Lock.unlock(); 
+                        Parent->Robot_Client_Queue.at(i).reset();
+                        cout << "delete the Object, Object ID is: " << i << endl;
+                    }
+                    else
+                    {
+                        Parent->Robot_Client_Queue.at(i)->Robot_Connect_Flag_Change_Lock.unlock();
+                    }
+                }
+            }
+        }
+    }
+
+    /*
+    ** ID：目标设备的ID
+    ** client_addr：目标设备的地址
+    ** addr_len：地址长度
+    ** CMD：目标设备类型
+    */
+    void Send_Response_Heart(const uint16_t ID, const struct sockaddr_in& client_addr, socklen_t addr_len, uint8_t CMD)
+    {
+        uint8_t Data = 'A';
+        Data_Frame_t *Send_Data = new Data_Frame_t(ID, CMD, sizeof(Data), &Data);
+
+        // 向客户端发送反馈指令
+        ssize_t sent = sendto(sockfd, (uint8_t *)Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
+        if (sent < 0)
+        {
+            std::cerr << "发送失败" << std::endl;
+        }
+        else
+        {
+            std::cout << "向设备： " << ID << " 发送心跳包反馈" << std::endl;
+        }
+    }
+
+    /*
+    ** ID：目标设备的ID
+    ** client_addr：目标设备的地址
+    ** addr_len：地址长度
+    ** Data：数据缓冲区
+    ** CMD：目标设备类型
+    */
+    void Send_Data2Client(const uint16_t ID, const struct sockaddr_in& client_addr, socklen_t addr_len, uint8_t *Data, uint8_t CMD)
+    {
+        // 向客户端发送控制指令
+        Data_Frame_t *Send_Data = new Data_Frame_t(ID, CMD, sizeof(Data), Data);
+
+        ssize_t sent = sendto(sockfd, Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
+        if (sent < 0)
+        {
+            std::cerr << "发送失败" << std::endl;
+        }
+        else
+        {
+            std::cout << "向设备： " << ID << " 发送控制指令: " << Data << std::endl;
+        }
+    }
+
+};
+
+
+
+
+
+
+
+
+
+#endif
