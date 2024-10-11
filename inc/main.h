@@ -61,6 +61,7 @@ private:
     thread *UDP_Server_Thread;
     thread *ID_Detect_Thread;
     weak_ptr<UDP_Server_t> Des;
+    uint16_t Port;
 
 public:
     struct sockaddr_in server_addr, client_addr;
@@ -69,7 +70,7 @@ public:
     array<atomic<uint8_t>, CLIENT_NUM> Client_Connect_Flag;
     atomic<bool> running = false;
 
-    UDP_Server_t()
+    UDP_Server_t(uint16_t Port_)
     {
         //  创建 UDP 套接字
         if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) 
@@ -82,7 +83,7 @@ public:
         memset(&server_addr, 0, sizeof(server_addr)); //  清零
         server_addr.sin_family = AF_INET;             //  设置地址族为 IPv4
         server_addr.sin_addr.s_addr = INADDR_ANY;     //  监听所有接口
-        server_addr.sin_port = htons(PORT);           //  设置端口号
+        server_addr.sin_port = htons(Port);           //  设置端口号
 
         //  绑定
         if(bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) 
@@ -91,6 +92,7 @@ public:
             close(sockfd);
             exit(EXIT_FAILURE);
         }
+        this->Port = Port_;
         running = true;
         UDP_Server_Thread = new thread(UDP_Server_t_Task, this);
         ID_Detect_Thread  = new thread(ID_Detect_Task, this);
@@ -102,6 +104,11 @@ public:
         this->running = false;
         this->UDP_Server_Thread->join();
         this->ID_Detect_Thread->join();
+    }
+
+    void Get_Ptr(std::weak_ptr<UDP_Server_t> F)
+    {
+        Des = F;
     }
 
     static void UDP_Server_t_Task(UDP_Server_t *Parent)
@@ -211,10 +218,10 @@ public:
                             {
                                 cout << "未找到监听程序！" << endl;
                             }
-                            Parent->Send_Response_Heart(Temp_ID, \
-                                                        Parent->Client_Queue.at(Temp_ID)->addr, \
-                                                        Parent->Client_Queue.at(Temp_ID)->addr_len, \
-                                                        CMD_Flag);
+                            // Parent->Send_Response_Heart(Temp_ID, \
+                            //                             Parent->Client_Queue.at(Temp_ID)->addr, \
+                            //                             Parent->Client_Queue.at(Temp_ID)->addr_len, \
+                            //                             CMD_Flag);
                             Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
                         }
                         // 当前为正在连接
@@ -318,11 +325,11 @@ public:
         ssize_t sent = sendto(sockfd, (uint8_t *)Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
         if (sent < 0)
         {
-            std::cerr << "发送失败" << std::endl;
+            std::cerr << Port << "发送失败" << std::endl;
         }
         else
         {
-            std::cout << "向设备： " << ID << " 发送心跳包反馈" << std::endl;
+            std::cout << Port << "向设备： " << ID << " 发送心跳包反馈" << std::endl;
         }
     }
 
@@ -341,11 +348,11 @@ public:
         ssize_t sent = sendto(sockfd, Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
         if (sent < 0)
         {
-            std::cerr << "发送失败" << std::endl;
+            std::cerr << Port << "发送失败" << std::endl;
         }
         else
         {
-            std::cout << "向设备： " << ID << " 发送控制指令: " << Data << std::endl;
+            std::cout << Port << "向设备： " << ID << " 发送控制指令: " << Data << std::endl;
         }
     }
     void Send_Data2Client(const struct sockaddr_in& client_addr, socklen_t addr_len ,Data_Frame_t *Send_Data)
@@ -355,11 +362,11 @@ public:
         ssize_t sent = sendto(sockfd, Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
         if (sent < 0)
         {
-            std::cerr << "发送失败" << std::endl;
+            std::cerr << Port << "发送失败" << std::endl;
         }
         else
         {
-            std::cout << "向设备： " << unsigned((uint16_t) (Send_Data->ID_H << 8 | Send_Data->ID_L)) << " 发送控制指令" << std::endl;
+            std::cout << Port << "向设备： " << unsigned((uint16_t) (Send_Data->ID_H << 8 | Send_Data->ID_L)) << " 发送控制指令" << std::endl;
         }
     }
 };

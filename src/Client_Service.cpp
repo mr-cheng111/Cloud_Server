@@ -68,7 +68,7 @@ void Client_Service_t::Listen_Service_Task(Client_Service_t *Parent)
             Parent->Heart_Counter_Lock.lock();
             Parent->Heart_Counter -= 1;
             Parent->Heart_Counter_Lock.unlock();
-            cout << unsigned(Parent->Heart_Counter) << endl;
+            // cout << unsigned(Parent->Heart_Counter) << endl;
         }
         else if(Parent->Heart_Counter == 0)
         {
@@ -78,6 +78,7 @@ void Client_Service_t::Listen_Service_Task(Client_Service_t *Parent)
                 Parent->Client_Connect_Flag_Change_Lock.lock();
                 Parent->Parent->Client_Connect_Flag.at(Parent->Service_ID) = DIS_CONNECTED;
                 Parent->Client_Connect_Flag_Change_Lock.unlock();
+                cout << unsigned(Parent->Heart_Counter) << endl;
             }
             else
             {

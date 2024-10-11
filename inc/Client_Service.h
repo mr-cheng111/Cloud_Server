@@ -25,7 +25,6 @@ private:
     std::thread *Client_Service_Thread;
     mutex Heart_Counter_Lock;
     uint8_t Heart_Counter = 25;
-
     
 public:
     uint16_t Service_ID;
@@ -44,6 +43,7 @@ public:
     Client_Service_t(uint16_t Client_ID, UDP_Server_t *Parent_);
 
     ~Client_Service_t();
+
     void Update_Heart_Counter(void);
 
     static void Listen_Service_Task(Client_Service_t *Parent);
