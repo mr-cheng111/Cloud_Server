@@ -26,6 +26,14 @@ enum
     DIS_CONNECTED
 };
 
+enum
+{
+    Send_Success = 0,
+    Rec_Success,
+    Not_Found_Client,
+    Get_Heart_Tick
+};
+
 struct Data_Frame_t
 {
 public:
@@ -172,9 +180,7 @@ public:
                             else
                             {
                                 throw std::runtime_error("Tail is not correct."); //  抛出异常
-                            }
-                            /***************TODO：测试发送到客户端逻辑**************/
-                            
+                            }                            
                             if(std::shared_ptr<UDP_Server_t> Des = Parent->Des.lock())
                             {
                                 if(Des->Client_Queue.at(Temp_ID) != nullptr)
@@ -183,7 +189,7 @@ public:
                                     {
                                         if(Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.try_lock())
                                         {
-                                            if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED )
+                                            if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
                                             {
                                                 Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                                                 
@@ -197,6 +203,12 @@ public:
                                                                       Des->Client_Queue.at(Temp_ID)->addr_len,
                                                                       Temp_Data);
                                                 Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+                                                Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                                Parent->Send_Response(Temp_ID, 
+                                                                      Parent->Client_Queue.at(Temp_ID)->addr, 
+                                                                      Parent->Client_Queue.at(Temp_ID)->addr_len, 
+                                                                      Send_Success);
+                                                Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
                                             }
                                         }
                                         else
@@ -217,16 +229,18 @@ public:
                                 else
                                 {
                                     cout << "未找到接受客户端！" << endl;
+                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                    Parent->Send_Response(Temp_ID, 
+                                                          Parent->Client_Queue.at(Temp_ID)->addr, 
+                                                          Parent->Client_Queue.at(Temp_ID)->addr_len, 
+                                                          Not_Found_Client);
+                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
                                 }
                             }
                             else
                             {
                                 cout << "未找到监听程序！" << endl;
                             }
-                            // Parent->Send_Response_Heart(Temp_ID, 
-                            //                             Parent->Client_Queue.at(Temp_ID)->addr, 
-                            //                             Parent->Client_Queue.at(Temp_ID)->addr_len, 
-                            //                             CMD_Flag);
                             Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
                         }
                         // 当前为正在连接
@@ -263,10 +277,12 @@ public:
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
                         {
                             Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                            Parent->Send_Response_Heart(Temp_ID, 
-                                                        Parent->Client_Queue.at(Temp_ID)->addr, 
-                                                        Parent->Client_Queue.at(Temp_ID)->addr_len, 
-                                                        CMD_Flag);
+                            Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                            Parent->Send_Response(Temp_ID, 
+                                                  Parent->Client_Queue.at(Temp_ID)->addr, 
+                                                  Parent->Client_Queue.at(Temp_ID)->addr_len, 
+                                                  Get_Heart_Tick);
+                            Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
                             Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
                         }
                         // 当前为正在连接
@@ -280,7 +296,7 @@ public:
             catch (const std::runtime_error& e) 
             {
                 std::cerr << "Caught an exception: " << e.what() << std::endl;
-            } 
+            }
             catch (...)
             {
                 std::cerr << "Caught an unknown exception!" << std::endl;
@@ -302,7 +318,16 @@ public:
                     // 如果连接状态为DIS_CONNECTED，则此时清理对应的服务节点
                     if(Parent->Client_Connect_Flag.at(i) == DIS_CONNECTED)
                     {
-                        Parent->Client_Queue.at(i)->Client_Connect_Flag_Change_Lock.unlock(); 
+                        Parent->Client_Queue.at(i)->Client_Connect_Flag_Change_Lock.unlock();
+                        // 尝试将断连信息回发
+                        if(Parent->Client_Queue.at(i)->Client_Send_Data_Lock.try_lock())
+                        {
+                            Parent->Send_Response(i, 
+                                                  Parent->Client_Queue.at(i)->addr, 
+                                                  Parent->Client_Queue.at(i)->addr_len, 
+                                                  Send_Success);
+                            Parent->Client_Queue.at(i)->Client_Send_Data_Lock.unlock();
+                        }
                         Parent->Client_Queue.at(i).reset();
                         cout << "delete the Object, Object ID is: " << i << endl;
                     }
@@ -321,23 +346,22 @@ public:
     ** addr_len：地址长度
     ** CMD：目标设备类型
     */
-    void Send_Response_Heart(const uint16_t ID, const struct sockaddr_in& client_addr, socklen_t addr_len, uint8_t CMD)
+    void Send_Response(const uint16_t ID, const struct sockaddr_in& client_addr, socklen_t addr_len, uint8_t Response)
     {
-        uint8_t Data = 'A';
-        Data_Frame_t *Send_Data = new Data_Frame_t(ID, CMD, sizeof(Data), &Data);
+        uint8_t Data = Response;
+        Data_Frame_t *Send_Data = new Data_Frame_t(ID, 0, sizeof(Data), &Data);
 
         // 向客户端发送反馈指令
-        ssize_t sent = sendto(sockfd, (uint8_t *)Send_Data, sizeof(Send_Data), MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
+        ssize_t sent = sendto(sockfd, Send_Data->Data_Buffer, Send_Data->Data_Length, MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
         if (sent < 0)
         {
             std::cerr << Port << "发送失败" << std::endl;
         }
         else
         {
-            std::cout << Port << "向设备：" << ID << " 发送心跳包反馈" << std::endl;
+            std::cout << Port << "向设备：" << ID << " 发送反馈" << std::endl;
         }
     }
-
     /*
     ** ID：目标设备的ID
     ** client_addr：目标设备的地址
