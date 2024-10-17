@@ -55,7 +55,10 @@ Client_Service_t::~Client_Service_t(void)
 void Client_Service_t::Update_Heart_Counter()
 {
     this->Heart_Counter_Lock.lock();
-    this->Heart_Counter += 10;
+    if(this->Heart_Counter <= 100)
+    {
+        this->Heart_Counter += 10;
+    }
     this->Heart_Counter_Lock.unlock();
 }
 
@@ -78,13 +81,14 @@ void Client_Service_t::Listen_Service_Task(Client_Service_t *Parent)
                 Parent->Client_Connect_Flag_Change_Lock.lock();
                 Parent->Parent->Client_Connect_Flag.at(Parent->Service_ID) = DIS_CONNECTED;
                 Parent->Client_Connect_Flag_Change_Lock.unlock();
-                cout << unsigned(Parent->Heart_Counter) << endl;
+                // cout << unsigned(Parent->Heart_Counter) << endl;
             }
             else
             {
                 cout << "Parent is nullptr." << endl;
             }
         }
+    
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 }

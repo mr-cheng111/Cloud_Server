@@ -19,7 +19,7 @@ CFLAGS := ${CFLAGS}
 LDFLAGS := ${LDFLAGS} --sysroot=${SYSROOT} -L${SYSROOT}/usr/lib
 
 LD:=ld
-CFLAGS	+= -O1 -ggdb -Wall -IM
+CFLAGS	+= -O0 -g -ggdb -Wall -IM
 CFLAGS  += -I$(INC_DIR) 
 
 

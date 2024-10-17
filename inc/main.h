@@ -19,6 +19,8 @@
 
 using namespace std;
 
+// #define DEBUG 1
+
 enum
 {
     CONNECTED = 0,
@@ -37,9 +39,9 @@ enum
 struct Data_Frame_t
 {
 public:
-    uint8_t *Data_Buffer;
+    uint8_t *Data_Buffer = nullptr;
     uint8_t Data_Length;
-    Data_Frame_t( const uint16_t ID_, uint8_t CMD_, const uint8_t Data_Length_, const uint8_t *Data_)
+    Data_Frame_t(const uint16_t ID_, uint8_t CMD_, const uint8_t Data_Length_, const uint8_t *Data_)
     {
         Data_Buffer = new uint8_t(5 + Data_Length_);
 
@@ -56,6 +58,14 @@ public:
         }
         Data_Length = Data_Length_ + 5;
     }
+    ~Data_Frame_t()
+    {
+        if(Data_Buffer != nullptr)
+        {
+            delete Data_Buffer;
+        }
+        Data_Buffer = nullptr;
+    }
     
 };
 
@@ -66,8 +76,8 @@ class UDP_Server_t
 private:
     int sockfd;
     uint8_t buffer[BUF_SIZE];
-    thread *UDP_Server_Thread;
-    thread *ID_Detect_Thread;
+    std::unique_ptr<std::thread> UDP_Server_Thread;
+    std::unique_ptr<std::thread> ID_Detect_Thread;
     weak_ptr<UDP_Server_t> Des;
     uint16_t Port;
 
@@ -86,7 +96,6 @@ public:
             std::cerr << "Socket creation failed" << std::endl;
             exit(EXIT_FAILURE);
         }
-
         //  填充服务器地址结构
         memset(&server_addr, 0, sizeof(server_addr)); //  清零
         server_addr.sin_family = AF_INET;             //  设置地址族为 IPv4
@@ -96,22 +105,27 @@ public:
         //  绑定
         if(bind(sockfd, (const struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) 
         {
-            std::cerr << "Bind failed" << std::endl;
+            std::cerr << "Bind Failed" << std::endl;
             close(sockfd);
             exit(EXIT_FAILURE);
         }
         this->Port = Port_;
         running = true;
-        UDP_Server_Thread = new thread(UDP_Server_t_Task, this);
-        ID_Detect_Thread  = new thread(ID_Detect_Task, this);
+        UDP_Server_Thread = std::make_unique<std::thread>(&UDP_Server_t::UDP_Server_t_Task, this);
+        ID_Detect_Thread = std::make_unique<std::thread>(&UDP_Server_t::ID_Detect_Task, this);
     }
 
     ~UDP_Server_t()
     {
         close(sockfd);
         this->running = false;
-        this->UDP_Server_Thread->join();
-        this->ID_Detect_Thread->join();
+        // 等待线程退出
+        if (UDP_Server_Thread && UDP_Server_Thread->joinable()) {
+            UDP_Server_Thread->join();
+        }
+        if (ID_Detect_Thread && ID_Detect_Thread->joinable()) {
+            ID_Detect_Thread->join();
+        }
     }
 
     void Get_Ptr(std::weak_ptr<UDP_Server_t> F)
@@ -176,72 +190,84 @@ public:
                                 Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.lock();
                                 Parent->Client_Queue.at(Temp_ID)->buffer.push(Data);
                                 Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.unlock();
-                            }
-                            else
-                            {
-                                throw std::runtime_error("Tail is not correct."); //  抛出异常
-                            }                            
-                            if(std::shared_ptr<UDP_Server_t> Des = Parent->Des.lock())
-                            {
-                                if(Des->Client_Queue.at(Temp_ID) != nullptr)
+                                Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
+
+                                if(std::shared_ptr<UDP_Server_t> Des = Parent->Des.lock())
                                 {
-                                    try
+                                    if(Des->Client_Queue.at(Temp_ID) != nullptr)
                                     {
-                                        if(Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.try_lock())
+                                        try
                                         {
-                                            if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
+                                            if(Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.try_lock())
+                                            {
+                                                if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
+                                                {
+                                                    Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                                                    
+                                                    Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.lock();
+                                                    Data_Frame_t *Temp_Data = Parent->Client_Queue.at(Temp_ID)->buffer.front();
+                                                    Parent->Client_Queue.at(Temp_ID)->buffer.pop();
+                                                    Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.unlock();
+
+                                                    Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                                    
+                                                    Des->Send_Data2Client(Des->Client_Queue.at(Temp_ID)->addr, 
+                                                                        Des->Client_Queue.at(Temp_ID)->addr_len,
+                                                                        Temp_Data);
+                                                    delete Temp_Data;
+                                                    Temp_Data = nullptr;
+                                                    Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+
+                                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                                    Parent->Send_Response(Temp_ID, 
+                                                                        Parent->Client_Queue.at(Temp_ID)->addr, 
+                                                                        Parent->Client_Queue.at(Temp_ID)->addr_len, 
+                                                                        Send_Success);
+                                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+                                                }
+                                            }
+                                            else
                                             {
                                                 Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                                                
-                                                Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.lock();
-                                                Data_Frame_t *Temp_Data = Parent->Client_Queue.at(Temp_ID)->buffer.front();
-                                                Parent->Client_Queue.at(Temp_ID)->buffer.pop();
-                                                Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.unlock();
-                                                Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
-                                                
-                                                Des->Send_Data2Client(Des->Client_Queue.at(Temp_ID)->addr, 
-                                                                      Des->Client_Queue.at(Temp_ID)->addr_len,
-                                                                      Temp_Data);
-                                                Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
-                                                Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
-                                                Parent->Send_Response(Temp_ID, 
-                                                                      Parent->Client_Queue.at(Temp_ID)->addr, 
-                                                                      Parent->Client_Queue.at(Temp_ID)->addr_len, 
-                                                                      Send_Success);
-                                                Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+                                                throw std::runtime_error("Can't get lock failed."); //  抛出异常
                                             }
                                         }
-                                        else
+                                        catch(const std::runtime_error& e)
                                         {
-                                            Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                                            throw std::runtime_error("Can't get lock failed."); //  抛出异常
+                                            std::cerr << "Failed: " << e.what() << '\n';
+                                        }
+                                        catch(...)
+                                        {
+                                            std::cerr << "Caught an unknown exception!" << endl;
                                         }
                                     }
-                                    catch(const std::runtime_error& e)
+                                    else
                                     {
-                                        std::cerr << "Failed: " << e.what() << '\n';
-                                    }
-                                    catch(...)
-                                    {
-                                        std::cerr << "Caught an unknown exception!" << endl;
+                                        cout << "未找到接受客户端！" << endl;
+                                        Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                        Parent->Send_Response(Temp_ID, 
+                                                            Parent->Client_Queue.at(Temp_ID)->addr, 
+                                                            Parent->Client_Queue.at(Temp_ID)->addr_len, 
+                                                            Not_Found_Client);
+                                        Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
                                     }
                                 }
                                 else
                                 {
-                                    cout << "未找到接受客户端！" << endl;
-                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
-                                    Parent->Send_Response(Temp_ID, 
-                                                          Parent->Client_Queue.at(Temp_ID)->addr, 
-                                                          Parent->Client_Queue.at(Temp_ID)->addr_len, 
-                                                          Not_Found_Client);
-                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+                                    cout << "未找到监听程序！" << endl;
                                 }
                             }
                             else
                             {
-                                cout << "未找到监听程序！" << endl;
+                                #ifdef DEBUG
+                                cout  << hex  << unsigned(Data->Data_Buffer[Data->Data_Length - 1]) << " " << hex << unsigned(Data_Tail);
+                                for(uint8_t i = 0; i < Data->Data_Length; i ++)
+                                {
+                                    cout << hex << unsigned(*(Parent->buffer + i)) << endl;
+                                }
+                                #endif
+                                throw std::runtime_error("Tail is not correct."); //  抛出异常
                             }
-                            Parent->Client_Queue.at(Temp_ID)->Update_Heart_Counter();
                         }
                         // 当前为正在连接
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTING)
@@ -257,7 +283,9 @@ public:
                     {
                         // 为此ID机器创建消息队列
                         Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
+                        #ifdef DEBUG
                         cout << "Client:" << Temp_ID << "，登录成功！" << endl;
+                        #endif
                         Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
                         Parent->Client_Connect_Flag.at(Temp_ID) = CONNECTED;
                         Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
@@ -271,7 +299,9 @@ public:
                             Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                             Parent->Client_Queue.at(Temp_ID).reset();
                             Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
+                            #ifdef DEBUG
                             cout << "Client:" << Temp_ID << "重新登录成功！" << endl;
+                            #endif
                         }
                         // 当前为已连接
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
@@ -320,16 +350,17 @@ public:
                     {
                         Parent->Client_Queue.at(i)->Client_Connect_Flag_Change_Lock.unlock();
                         // 尝试将断连信息回发
-                        if(Parent->Client_Queue.at(i)->Client_Send_Data_Lock.try_lock())
-                        {
-                            Parent->Send_Response(i, 
-                                                  Parent->Client_Queue.at(i)->addr, 
-                                                  Parent->Client_Queue.at(i)->addr_len, 
-                                                  Send_Success);
-                            Parent->Client_Queue.at(i)->Client_Send_Data_Lock.unlock();
-                        }
+                        Parent->Client_Queue.at(i)->Client_Send_Data_Lock.lock();
+                        Parent->Send_Response(i, 
+                                                Parent->Client_Queue.at(i)->addr, 
+                                                Parent->Client_Queue.at(i)->addr_len, 
+                                                Send_Success);
+                        Parent->Client_Queue.at(i)->Client_Send_Data_Lock.unlock();
+                        
                         Parent->Client_Queue.at(i).reset();
+                        #ifdef DEBUG
                         cout << "delete the Object, Object ID is: " << i << endl;
+                        #endif
                     }
                     else
                     {
@@ -349,7 +380,7 @@ public:
     void Send_Response(const uint16_t ID, const struct sockaddr_in& client_addr, socklen_t addr_len, uint8_t Response)
     {
         uint8_t Data = Response;
-        Data_Frame_t *Send_Data = new Data_Frame_t(ID, 0, sizeof(Data), &Data);
+        std::unique_ptr<Data_Frame_t> Send_Data = std::make_unique<Data_Frame_t>(ID, 0, sizeof(Data), &Data);
 
         // 向客户端发送反馈指令
         ssize_t sent = sendto(sockfd, Send_Data->Data_Buffer, Send_Data->Data_Length, MSG_CONFIRM, (const struct sockaddr *)&client_addr, addr_len);
@@ -359,7 +390,9 @@ public:
         }
         else
         {
+            #ifdef DEBUG
             std::cout << Port << "向设备：" << ID << " 发送反馈" << std::endl;
+            #endif
         }
     }
     /*
@@ -383,17 +416,12 @@ public:
         }
         else
         {
+            #ifdef DEBUG
             std::cout << Port << "向设备：" << unsigned((uint16_t) (Send_Data->Data_Buffer[1] << 8 | Send_Data->Data_Buffer[0])) << " 发送控制指令" << std::endl;
+            #endif
         }
     }
 };
-
-
-
-
-
-
-
 
 
 #endif
