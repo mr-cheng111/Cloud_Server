@@ -1,1 +1,4 @@
 ./UDP_Server
+nohup.out
+Test.py
+.vscode
