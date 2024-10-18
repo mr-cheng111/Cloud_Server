@@ -15,7 +15,7 @@
 
 #define PORT 80             //  监听的端口
 #define BUF_SIZE 1024       //  缓冲区大小
-#define CLIENT_NUM 15000    // 机器人最大数量, 同时也是ID范围
+#define CLIENT_NUM 1500     // 机器人最大数量, 同时也是ID范围
 
 using namespace std;
 
@@ -31,8 +31,11 @@ enum
 enum
 {
     Send_Success = 0,
+
     Rec_Success,
     Not_Found_Client,
+    No_Data,
+    Dis_Connect,
     Get_Heart_Tick
 };
 
@@ -120,10 +123,12 @@ public:
         close(sockfd);
         this->running = false;
         // 等待线程退出
-        if (UDP_Server_Thread && UDP_Server_Thread->joinable()) {
+        if (UDP_Server_Thread && UDP_Server_Thread->joinable()) 
+        {
             UDP_Server_Thread->join();
         }
-        if (ID_Detect_Thread && ID_Detect_Thread->joinable()) {
+        if (ID_Detect_Thread && ID_Detect_Thread->joinable()) 
+        {
             ID_Detect_Thread->join();
         }
     }
@@ -164,17 +169,13 @@ public:
                         // 为此ID机器创建消息队列
                         Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
                         cout << "Client:" << Temp_ID << "，登录成功！" << endl;
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
                         Parent->Client_Connect_Flag.at(Temp_ID) = CONNECTED;
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                     }
                     else 
                     {
                         // 当前状态为未连接
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
                         if(Parent->Client_Connect_Flag.at(Temp_ID) == DIS_CONNECTED)
                         {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                             Parent->Client_Queue.at(Temp_ID).reset();
                             Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
                             cout << "Client:" << Temp_ID << "重新登录成功！" << endl;
@@ -182,7 +183,16 @@ public:
                         // 当前为已连接
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
                         {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
+                            // 更新客户端信息
+                            if(Parent->Client_Queue.at(Temp_ID)->addr.sin_addr.s_addr != Parent->client_addr.sin_addr.s_addr ||
+                               Parent->Client_Queue.at(Temp_ID)->addr.sin_port != Parent->client_addr.sin_port ||
+                               Parent->Client_Queue.at(Temp_ID)->addr.sin_family != Parent->client_addr.sin_family)
+                            {
+                               Parent->Client_Queue.at(Temp_ID)->addr.sin_addr.s_addr = Parent->client_addr.sin_addr.s_addr;
+                               Parent->Client_Queue.at(Temp_ID)->addr.sin_port = Parent->client_addr.sin_port;
+                               Parent->Client_Queue.at(Temp_ID)->addr.sin_family = Parent->client_addr.sin_family;
+                            }
+
                             // 将数据放入队列
                             Data_Frame_t *Data = new Data_Frame_t(Temp_ID, CMD_Flag, Data_Length, Parent->buffer + 4);
                             if(Data->Data_Buffer[Data->Data_Length - 1] == Data_Tail)
@@ -198,26 +208,23 @@ public:
                                     {
                                         try
                                         {
-                                            if(Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.try_lock())
-                                            {
-                                                if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
+                                            if(Des->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
+                                            {                                                
+                                                if(Parent->Client_Queue.at(Temp_ID)->buffer.size() > 0)
                                                 {
-                                                    Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                                                    
                                                     Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.lock();
                                                     Data_Frame_t *Temp_Data = Parent->Client_Queue.at(Temp_ID)->buffer.front();
                                                     Parent->Client_Queue.at(Temp_ID)->buffer.pop();
                                                     Parent->Client_Queue.at(Temp_ID)->Client_Get_Data_Lock.unlock();
-
                                                     Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
-                                                    
+                
                                                     Des->Send_Data2Client(Des->Client_Queue.at(Temp_ID)->addr, 
                                                                         Des->Client_Queue.at(Temp_ID)->addr_len,
                                                                         Temp_Data);
                                                     delete Temp_Data;
                                                     Temp_Data = nullptr;
                                                     Des->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
-
+                                        
                                                     Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
                                                     Parent->Send_Response(Temp_ID, 
                                                                         Parent->Client_Queue.at(Temp_ID)->addr, 
@@ -225,11 +232,16 @@ public:
                                                                         Send_Success);
                                                     Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
                                                 }
-                                            }
-                                            else
-                                            {
-                                                Des->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
-                                                throw std::runtime_error("Can't get lock failed."); //  抛出异常
+                                                else
+                                                {
+                                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
+                                                    Parent->Send_Response(Temp_ID, 
+                                                                        Parent->Client_Queue.at(Temp_ID)->addr, 
+                                                                        Parent->Client_Queue.at(Temp_ID)->addr_len, 
+                                                                        No_Data);
+                                                    Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.unlock();
+                                                    std::runtime_error("Try to Send nullptr!");
+                                                }
                                             }
                                         }
                                         catch(const std::runtime_error& e)
@@ -272,7 +284,6 @@ public:
                         // 当前为正在连接
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTING)
                         {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                         }
                     }
                 }
@@ -286,17 +297,13 @@ public:
                         #ifdef DEBUG
                         cout << "Client:" << Temp_ID << "，登录成功！" << endl;
                         #endif
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
                         Parent->Client_Connect_Flag.at(Temp_ID) = CONNECTED;
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                     }
                     else
                     {
                         // 当前状态为未连接
-                        Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.lock();
                         if(Parent->Client_Connect_Flag.at(Temp_ID) == DIS_CONNECTED)
                         {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                             Parent->Client_Queue.at(Temp_ID).reset();
                             Parent->Client_Queue.at(Temp_ID) =  make_shared<Client_Service_t>(Temp_ID, Parent);
                             #ifdef DEBUG
@@ -306,7 +313,6 @@ public:
                         // 当前为已连接
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTED)
                         {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                             Parent->Client_Queue.at(Temp_ID)->Client_Send_Data_Lock.lock();
                             Parent->Send_Response(Temp_ID, 
                                                   Parent->Client_Queue.at(Temp_ID)->addr, 
@@ -318,7 +324,6 @@ public:
                         // 当前为正在连接
                         else if(Parent->Client_Connect_Flag.at(Temp_ID) == CONNECTING)
                         {
-                            Parent->Client_Queue.at(Temp_ID)->Client_Connect_Flag_Change_Lock.unlock();
                         }
                     }
                 }
@@ -342,29 +347,24 @@ public:
             {
                 // 检测是否创建机器人服务节点
                 if(Parent->Client_Queue.at(i) != nullptr)
-                {
-                    // 将连接表加锁
-                    Parent->Client_Queue.at(i)->Client_Connect_Flag_Change_Lock.lock();
+                {                    
                     // 如果连接状态为DIS_CONNECTED，则此时清理对应的服务节点
                     if(Parent->Client_Connect_Flag.at(i) == DIS_CONNECTED)
                     {
-                        Parent->Client_Queue.at(i)->Client_Connect_Flag_Change_Lock.unlock();
                         // 尝试将断连信息回发
-                        Parent->Client_Queue.at(i)->Client_Send_Data_Lock.lock();
-                        Parent->Send_Response(i, 
+                        if(Parent->Client_Queue.at(i)->Client_Send_Data_Lock.try_lock() == true)
+                        {
+                            Parent->Send_Response(i, 
                                                 Parent->Client_Queue.at(i)->addr, 
                                                 Parent->Client_Queue.at(i)->addr_len, 
-                                                Send_Success);
-                        Parent->Client_Queue.at(i)->Client_Send_Data_Lock.unlock();
-                        
-                        Parent->Client_Queue.at(i).reset();
-                        #ifdef DEBUG
-                        cout << "delete the Object, Object ID is: " << i << endl;
-                        #endif
-                    }
-                    else
-                    {
-                        Parent->Client_Queue.at(i)->Client_Connect_Flag_Change_Lock.unlock();
+                                                Dis_Connect);
+                            Parent->Client_Queue.at(i)->Client_Send_Data_Lock.unlock();
+                            
+                            Parent->Client_Queue.at(i).reset();
+                            #ifdef DEBUG
+                            cout << "delete the Object, Object ID is: " << i << endl;
+                            #endif
+                        }
                     }
                 }
             }

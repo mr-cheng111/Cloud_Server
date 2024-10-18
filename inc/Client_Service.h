@@ -29,7 +29,6 @@ private:
 public:
     uint16_t Service_ID;
     queue<Data_Frame_t *> buffer;
-    mutex Client_Connect_Flag_Change_Lock;
     mutex Client_Get_Data_Lock;
     mutex Client_Send_Data_Lock;
 
@@ -38,8 +37,6 @@ public:
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
     
-    Client_Service_t(uint16_t Client_ID);
-
     Client_Service_t(uint16_t Client_ID, UDP_Server_t *Parent_);
 
     ~Client_Service_t();
