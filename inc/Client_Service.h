@@ -5,14 +5,15 @@
 #include <iostream>
 #include <string>
 #include <linux/udp.h>
-#include <unistd.h>    // For close
-#include <arpa/inet.h> // For sockaddr_in and inet_ntoa
+#include <unistd.h>    
+#include <arpa/inet.h> 
 #include <mutex>
 #include <thread>
 #include <atomic>
 #include <queue>
 #include <string.h>
 #include <memory>
+#include <atomic>
 
 using namespace std;
 
@@ -23,8 +24,7 @@ class Client_Service_t
 {
 private:
     std::thread *Client_Service_Thread;
-    mutex Heart_Counter_Lock;
-    uint8_t Heart_Counter = 25;
+    atomic<uint8_t> Heart_Counter = 25;
     
 public:
     uint16_t Service_ID;

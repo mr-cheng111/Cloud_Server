@@ -44,12 +44,10 @@ Client_Service_t::~Client_Service_t(void)
 
 void Client_Service_t::Update_Heart_Counter()
 {
-    this->Heart_Counter_Lock.lock();
     if(this->Heart_Counter <= 100)
     {
         this->Heart_Counter += 10;
     }
-    this->Heart_Counter_Lock.unlock();
 }
 
 void Client_Service_t::Listen_Service_Task(Client_Service_t *Parent)
@@ -58,9 +56,7 @@ void Client_Service_t::Listen_Service_Task(Client_Service_t *Parent)
     {
         if(Parent->Heart_Counter > 0)
         {
-            Parent->Heart_Counter_Lock.lock();
             Parent->Heart_Counter -= 1;
-            Parent->Heart_Counter_Lock.unlock();
             // cout << unsigned(Parent->Heart_Counter) << endl;
         }
         else if(Parent->Heart_Counter == 0)
